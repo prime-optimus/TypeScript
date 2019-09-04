@@ -94,13 +94,19 @@ namespace ts {
                 case SyntaxKind.PrefixUnaryExpression:
                     return visitPrefixUnaryExpression(node as PrefixUnaryExpression);
                 case SyntaxKind.PostfixUnaryExpression:
-                    return visitPostfixUnaryExpression(node as PostfixUnaryExpression);
+                    return visitPostfixUnaryExpression(node as PostfixUnaryExpression, /*valueIsDiscarded*/ false);
                 case SyntaxKind.CallExpression:
                     return visitCallExpression(node as CallExpression);
                 case SyntaxKind.BinaryExpression:
                     return visitBinaryExpression(node as BinaryExpression);
                 case SyntaxKind.PrivateIdentifier:
                     return visitPrivateIdentifier(node as PrivateIdentifier);
+                case SyntaxKind.ExpressionStatement:
+                    return visitExpressionStatement(node as ExpressionStatement);
+                case SyntaxKind.ForStatement:
+                    return visitForStatement(node as ForStatement);
+                case SyntaxKind.TaggedTemplateExpression:
+                    return visitTaggedTemplateExpression(node as TaggedTemplateExpression);
             }
             return visitEachChild(node, visitor, context);
         }
@@ -209,24 +215,27 @@ namespace ts {
             return undefined;
         }
 
+        function createPrivateIdentifierAccess(info: PrivateIdentifierInfo, receiver: Expression): Expression {
+            receiver = visitNode(receiver, visitor, isExpression);
+            switch (info.placement) {
+                case PrivateIdentifierPlacement.InstanceField:
+                    return createClassPrivateFieldGetHelper(
+                        context,
+                        nodeIsSynthesized(receiver) ? receiver : getSynthesizedClone(receiver),
+                        info.weakMapName
+                    );
+                default: return Debug.fail("Unexpected private identifier placement");
+            }
+        }
+
         function visitPropertyAccessExpression(node: PropertyAccessExpression) {
             if (shouldTransformPrivateFields && isPrivateIdentifier(node.name)) {
                 const privateIdentifierInfo = accessPrivateIdentifier(node.name);
                 if (privateIdentifierInfo) {
-                    switch (privateIdentifierInfo.placement) {
-                        case PrivateIdentifierPlacement.InstanceField:
-                            return setOriginalNode(
-                                setTextRange(
-                                    createClassPrivateFieldGetHelper(
-                                        context,
-                                        visitNode(node.expression, visitor, isExpression),
-                                        privateIdentifierInfo.weakMapName
-                                    ),
-                                    node
-                                ),
-                                node
-                            );
-                    }
+                    return setOriginalNode(
+                        createPrivateIdentifierAccess(privateIdentifierInfo, node.expression),
+                        node
+                    );
                 }
             }
             return visitEachChild(node, visitor, context);
@@ -235,57 +244,94 @@ namespace ts {
         function visitPrefixUnaryExpression(node: PrefixUnaryExpression) {
             if (shouldTransformPrivateFields && isPrivateIdentifierPropertyAccessExpression(node.operand)) {
                 const operator = node.operator === SyntaxKind.PlusPlusToken ?
-                    SyntaxKind.PlusEqualsToken : node.operator === SyntaxKind.MinusMinusToken ?
-                        SyntaxKind.MinusEqualsToken : undefined;
-                if (operator) {
-                    const transformedExpr = setOriginalNode(
-                        createBinary(
-                            node.operand,
-                            operator,
-                            createLiteral(1)
+                    SyntaxKind.PlusToken : node.operator === SyntaxKind.MinusMinusToken ?
+                        SyntaxKind.MinusToken : undefined;
+                let info: PrivateIdentifierInfo | undefined;
+                if (operator && (info = accessPrivateIdentifier(node.operand.name))) {
+                    const receiver = visitNode(node.operand.expression, visitor, isExpression);
+                    const { readExpression, initializeExpression } = createCopiableReceiverExpr(receiver);
+
+                    const existingValue = createPrefix(SyntaxKind.PlusToken, createPrivateIdentifierAccess(info, readExpression));
+
+                    return setOriginalNode(
+                        createPrivateIdentifierAssignment(
+                            info,
+                            initializeExpression || readExpression,
+                            createBinary(existingValue, operator, createLiteral(1)),
+                            SyntaxKind.EqualsToken
                         ),
                         node
                     );
-                    return visitNode(transformedExpr, visitor);
                 }
             }
             return visitEachChild(node, visitor, context);
         }
 
-        function visitPostfixUnaryExpression(node: PostfixUnaryExpression) {
+        function visitPostfixUnaryExpression(node: PostfixUnaryExpression, valueIsDiscarded: boolean) {
             if (shouldTransformPrivateFields && isPrivateIdentifierPropertyAccessExpression(node.operand)) {
                 const operator = node.operator === SyntaxKind.PlusPlusToken ?
                     SyntaxKind.PlusToken : node.operator === SyntaxKind.MinusMinusToken ?
                         SyntaxKind.MinusToken : undefined;
-                if (operator) {
-                    // Create a temporary variable if the receiver is not inlinable, since we
-                    // will need to access it multiple times.
-                    const receiver = isSimpleInlineableExpression(node.operand.expression) ?
-                        undefined :
-                        createTempVariable(hoistVariableDeclaration);
-                    // Create a temporary variable to store the value returned by the expression.
-                    const returnValue = createTempVariable(hoistVariableDeclaration);
+                let info: PrivateIdentifierInfo | undefined;
+                if (operator && (info = accessPrivateIdentifier(node.operand.name))) {
+                    const receiver = visitNode(node.operand.expression, visitor, isExpression);
+                    const { readExpression, initializeExpression } = createCopiableReceiverExpr(receiver);
 
-                    const transformedExpr = inlineExpressions(compact<Expression>([
-                        receiver && createAssignment(receiver, node.operand.expression),
-                        // Store the existing value of the private name in the temporary.
-                        createAssignment(returnValue, receiver ? createPropertyAccess(receiver, node.operand.name) : node.operand),
-                        // Assign to private name.
-                        createAssignment(
-                            receiver ? createPropertyAccess(receiver, node.operand.name) : node.operand,
-                            createBinary(
-                                returnValue, operator, createLiteral(1)
-                            )
-                        ),
-                        // Return the cached value.
-                        returnValue
-                    ]));
-                    return visitNode(transformedExpr, visitor);
+                    const existingValue = createPrefix(SyntaxKind.PlusToken, createPrivateIdentifierAccess(info, readExpression));
+
+                    // Create a temporary variable to store the value returned by the expression.
+                    const returnValue = valueIsDiscarded ? undefined : createTempVariable(hoistVariableDeclaration);
+
+                    return setOriginalNode(
+                        inlineExpressions(compact<Expression>([
+                            createPrivateIdentifierAssignment(
+                                info,
+                                initializeExpression || readExpression,
+                                createBinary(
+                                    returnValue ? createAssignment(returnValue, existingValue) : existingValue,
+                                    operator,
+                                    createLiteral(1)
+                                ),
+                                SyntaxKind.EqualsToken
+                            ),
+                            returnValue
+                        ])),
+                        node
+                    );
                 }
             }
             return visitEachChild(node, visitor, context);
         }
 
+        function visitForStatement(node: ForStatement) {
+            if (node.incrementor && isPostfixUnaryExpression(node.incrementor)) {
+                return updateFor(
+                    node,
+                    visitNode(node.initializer, visitor, isForInitializer),
+                    visitNode(node.condition, visitor, isExpression),
+                    visitPostfixUnaryExpression(node.incrementor, /*valueIsDiscarded*/ true),
+                    visitNode(node.statement, visitor, isStatement)
+                );
+            }
+            return visitEachChild(node, visitor, context);
+        }
+
+        function visitExpressionStatement(node: ExpressionStatement) {
+            if (isPostfixUnaryExpression(node.expression)) {
+                return updateExpressionStatement(node, visitPostfixUnaryExpression(node.expression, /*valueIsDiscarded*/ true));
+            }
+            return visitEachChild(node, visitor, context);
+        }
+
+        function createCopiableReceiverExpr(receiver: Expression): { readExpression: Expression; initializeExpression: Expression | undefined } {
+            const clone = nodeIsSynthesized(receiver) ? receiver : getSynthesizedClone(receiver);
+            if (isSimpleInlineableExpression(receiver)) {
+                return { readExpression: clone, initializeExpression: undefined };
+            }
+            const readExpression = createTempVariable(hoistVariableDeclaration);
+            const initializeExpression = createAssignment(readExpression, clone);
+            return { readExpression, initializeExpression };
+        }
 
         function visitCallExpression(node: CallExpression) {
             if (shouldTransformPrivateFields && isPrivateIdentifierPropertyAccessExpression(node.expression)) {
@@ -296,6 +342,23 @@ namespace ts {
                     createPropertyAccess(visitNode(target, visitor), "call"),
                     /*typeArguments*/ undefined,
                     [visitNode(thisArg, visitor, isExpression), ...visitNodes(node.arguments, visitor, isExpression)]
+                );
+            }
+            return visitEachChild(node, visitor, context);
+        }
+
+        function visitTaggedTemplateExpression(node: TaggedTemplateExpression) {
+            if (shouldTransformPrivateFields && isPrivateIdentifierPropertyAccessExpression(node.tag)) {
+                // Bind the `this` correctly for tagged template literals when the tag is a private identifier property access.
+                const { thisArg, target } = createCallBinding(node.tag, hoistVariableDeclaration, languageVersion);
+                return updateTaggedTemplate(
+                    node,
+                    createCall(
+                        createPropertyAccess(visitNode(target, visitor), "bind"),
+                        /*typeArguments*/ undefined,
+                        [visitNode(thisArg, visitor, isExpression)]
+                    ),
+                    visitNode(node.template, visitor, isTemplateLiteral)
                 );
             }
             return visitEachChild(node, visitor, context);
@@ -344,15 +407,13 @@ namespace ts {
             receiver = visitNode(receiver, visitor, isExpression);
             right = visitNode(right, visitor, isExpression);
             if (isCompoundAssignment(operator)) {
-                const isReceiverInlineable = isSimpleInlineableExpression(receiver);
-                const getReceiver = isReceiverInlineable ? receiver : createTempVariable(hoistVariableDeclaration);
-                const setReceiver = isReceiverInlineable ? receiver : createAssignment(getReceiver, receiver);
+                const { readExpression, initializeExpression } = createCopiableReceiverExpr(receiver);
                 return createClassPrivateFieldSetHelper(
                     context,
-                    setReceiver,
+                    initializeExpression || readExpression,
                     info.weakMapName,
                     createBinary(
-                        createClassPrivateFieldGetHelper(context, getReceiver, info.weakMapName),
+                        createClassPrivateFieldGetHelper(context, readExpression, info.weakMapName),
                         getNonAssignmentOperatorForCompoundAssignment(operator),
                         right
                     )
@@ -514,17 +575,18 @@ namespace ts {
             return setTextRange(createNodeArray(members), /*location*/ node.members);
         }
 
-        function doesClassElementRequireConstructorStatement(member: ClassElement) {
-            return isInitializedProperty(member) || (shouldTransformPrivateFields && isPrivateIdentifierPropertyDeclaration(member));
+        function isPropertyDeclarationThatRequiresConstructorStatement(member: ClassElement): member is PropertyDeclaration {
+            return !hasStaticModifier(member) && (isInitializedProperty(member) || (shouldTransformPrivateFields && isPrivateIdentifierPropertyDeclaration(member)));
         }
 
         function transformConstructor(node: ClassDeclaration | ClassExpression, isDerivedClass: boolean) {
             const constructor = visitNode(getFirstConstructorWithBody(node), visitor, isConstructorDeclaration);
-            if (!forEach(node.members, doesClassElementRequireConstructorStatement)) {
+            const properties = node.members.filter(isPropertyDeclarationThatRequiresConstructorStatement);
+            if (!some(properties)) {
                 return constructor;
             }
             const parameters = visitParameterList(constructor ? constructor.parameters : undefined, visitor, context);
-            const body = transformConstructorBody(node, constructor, isDerivedClass);
+            const body = transformConstructorBody(node, constructor, properties, isDerivedClass);
             if (!body) {
                 return undefined;
             }
@@ -544,13 +606,7 @@ namespace ts {
             );
         }
 
-        function isInstanceProperty(node: ClassElement): node is PropertyDeclaration {
-            return isPropertyDeclaration(node) && !hasStaticModifier(node);
-        }
-
-        function transformConstructorBody(node: ClassDeclaration | ClassExpression, constructor: ConstructorDeclaration | undefined, isDerivedClass: boolean) {
-            const properties = node.members.filter(isInstanceProperty);
-
+        function transformConstructorBody(node: ClassDeclaration | ClassExpression, constructor: ConstructorDeclaration | undefined, properties: PropertyDeclaration[], isDerivedClass: boolean) {
             // Only generate synthetic constructor when there are property initializers to move.
             if (!constructor && !some(properties)) {
                 return visitFunctionBody(/*node*/ undefined, visitor, context);

@@ -1,3 +1,5 @@
+// @target: esnext, es2015
+
 class A {
     #field = 1;
     otherObject = new A();

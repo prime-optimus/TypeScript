@@ -1373,7 +1373,7 @@
         "category": "Error",
         "code": 2375
     },
-    "A 'super' call must be the first statement in the constructor when a class contains initialized properties, parameter properties, or downleveled private identifiers.": {
+    "A 'super' call must be the first statement in the constructor when a class contains initialized properties, parameter properties, or private identifiers.": {
         "category": "Error",
         "code": 2376
     },
@@ -5194,7 +5194,7 @@
         "category": "Error",
         "code": 18009
     },
-    "Accessibility modifiers cannot be used with private identifiers.": {
+    "An accessibility modifier cannot be used with a private identifier.": {
         "category": "Error",
         "code": 18010
     },
@@ -5206,7 +5206,7 @@
         "category": "Error",
         "code": 18012
     },
-    "Property '{0}' is not accessible outside class '{1}' because it is privately named.": {
+    "Property '{0}' is not accessible outside class '{1}' because it has a private identifier.": {
         "category": "Error",
         "code": 18013
     },
@@ -5230,7 +5230,7 @@
         "category": "Error",
         "code": 18018
     },
-    "'{0}' modifier cannot be used with a private-named property.": {
+    "'{0}' modifier cannot be used with a private identifier": {
         "category": "Error",
         "code": 18019
     },
@@ -5253,5 +5253,9 @@
     "Compiler reserves name '{0}' when emitting private identifier downlevel.": {
         "category": "Error",
         "code": 18027
+    },
+    "Private identifiers are only available when targeting ECMAScript 2015 and higher.": {
+        "category": "Error",
+        "code": 18028
     }
 }
