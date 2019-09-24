@@ -5207,6 +5207,9 @@ namespace ts {
         return unescapeLeadingUnderscores(identifierOrPrivateIdentifier.escapedText);
     }
     export function symbolName(symbol: Symbol): string {
+        if (symbol.valueDeclaration && isPrivateIdentifierPropertyDeclaration(symbol.valueDeclaration)) {
+            return idText(symbol.valueDeclaration.name);
+        }
         return unescapeLeadingUnderscores(symbol.escapedName);
     }
 
