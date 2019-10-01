@@ -4043,6 +4043,14 @@
         "category": "Message",
         "code": 6221
     },
+    "Module '{0}' has no default export. Did you mean to use 'import { {1} } from {0}' instead?": {
+        "category": "Error",
+        "code": 6222
+    },
+    "Module '{0}' has no exported member '{1}'. Did you mean to use 'import {1} from {0}' instead?": {
+        "category": "Error",
+        "code": 6223
+    },
 
     "Projects to reference": {
         "category": "Message",

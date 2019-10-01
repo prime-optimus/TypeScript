@@ -2190,7 +2190,18 @@ namespace ts {
                         ));
                     }
                     else {
-                        error(node.name, Diagnostics.Module_0_has_no_default_export, symbolToString(moduleSymbol));
+                        if (moduleSymbol.exports && moduleSymbol.exports.has(node.symbol.escapedName)) {
+                            error(
+                                node.name,
+                                Diagnostics.Module_0_has_no_default_export_Did_you_mean_to_use_import_1_from_0_instead,
+                                symbolToString(moduleSymbol),
+                                symbolToString(node.symbol),
+                            );
+                        }
+                        else {
+                            error(node.name, Diagnostics.Module_0_has_no_default_export, symbolToString(moduleSymbol));
+                        }
+
                     }
                 }
                 else if (hasSyntheticDefault) {
@@ -2297,7 +2308,17 @@ namespace ts {
                             }
                         }
                         else {
-                            error(name, Diagnostics.Module_0_has_no_exported_member_1, moduleName, declarationName);
+                            if (moduleSymbol.exports && moduleSymbol.exports.has(InternalSymbolName.Default)) {
+                                error(
+                                    name,
+                                    Diagnostics.Module_0_has_no_exported_member_1_Did_you_mean_to_use_import_1_from_0_instead,
+                                    moduleName,
+                                    declarationName
+                                );
+                            }
+                            else {
+                                error(name, Diagnostics.Module_0_has_no_exported_member_1, moduleName, declarationName);
+                            }
                         }
                     }
                     return symbol;
